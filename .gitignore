@@ -1,3 +1,4 @@
 build/
 third-party/
 .DS_Store
+.vscode/
