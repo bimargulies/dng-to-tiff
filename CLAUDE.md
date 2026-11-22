@@ -33,6 +33,10 @@ cmake --build build --parallel
 
 Outputs `build/dng_to_tiff`.  Install with `cmake --install build --prefix ~/.local` (the default prefix, `/usr/local`, needs `sudo`).
 
+## Style and lint
+
+Every `if`, `else`, `for`, `while` and `do` body uses `{}`, with opening braces on the same line (functions and classes too), enforced by `.clang-tidy` and `.clang-format`. Run `scripts/lint.sh`; fix formatting with `clang-format -i src/*.cpp`.
+
 ## Usage
 
 ```bash

@@ -48,27 +48,27 @@
 
 // ---------------------------------------------------------------------------
 
-static std::string stem(const std::string &path)
-{
+static std::string stem(const std::string &path) {
     // Remove directory prefix.
     const size_t slash = path.find_last_of('/');
     std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
     // Remove extension (but keep a leading dot of a hidden file).
     const size_t dot = name.find_last_of('.');
-    if (dot != std::string::npos && dot > 0)
+    if (dot != std::string::npos && dot > 0) {
         name.resize(dot);
+    }
     return name;
 }
 
-static std::string dirOf(const std::string &path)
-{
+static std::string dirOf(const std::string &path) {
     const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos) return ".";
+    if (slash == std::string::npos) {
+        return ".";
+    }
     return path.substr(0, slash);
 }
 
-static std::string outputPathFor(const std::string &input, const std::string &outDir)
-{
+static std::string outputPathFor(const std::string &input, const std::string &outDir) {
     std::string out = outDir.empty() ? dirOf(input) : outDir;
     out += '/';
     out += stem(input);
@@ -76,14 +76,12 @@ static std::string outputPathFor(const std::string &input, const std::string &ou
     return out;
 }
 
-static bool isDirectory(const std::string &path)
-{
+static bool isDirectory(const std::string &path) {
     struct stat st {};
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static bool sameFile(const std::string &a, const std::string &b)
-{
+static bool sameFile(const std::string &a, const std::string &b) {
     struct stat sa {};
     struct stat sb {};
     return stat(a.c_str(), &sa) == 0 && stat(b.c_str(), &sb) == 0 &&
@@ -92,8 +90,7 @@ static bool sameFile(const std::string &a, const std::string &b)
 
 // A key identifying an output path before the file exists. The name is folded
 // to lower case because the default macOS file system ignores case.
-static std::string outputKey(const std::string &output)
-{
+static std::string outputKey(const std::string &output) {
     char resolved[PATH_MAX];
     const std::string dir = dirOf(output);
     std::string key = (realpath(dir.c_str(), resolved) != nullptr) ? resolved : dir;
@@ -107,23 +104,18 @@ static std::string outputKey(const std::string &output)
 
 // Refuse, before any work is done, a batch that would overwrite one of its own
 // inputs or write two inputs to the same output.
-static bool checkOutputs(const std::vector<std::string> &inputs, const std::string &outDir)
-{
+static bool checkOutputs(const std::vector<std::string> &inputs, const std::string &outDir) {
     std::set<std::string> seen;
-    for (const std::string &input : inputs)
-    {
+    for (const std::string &input : inputs) {
         const std::string output = outputPathFor(input, outDir);
-        for (const std::string &other : inputs)
-        {
-            if (sameFile(output, other))
-            {
+        for (const std::string &other : inputs) {
+            if (sameFile(output, other)) {
                 fprintf(stderr, "Output %s would overwrite input %s\n",
                         output.c_str(), other.c_str());
                 return false;
             }
         }
-        if (!seen.insert(outputKey(output)).second)
-        {
+        if (!seen.insert(outputKey(output)).second) {
             fprintf(stderr, "More than one input would be written to %s\n", output.c_str());
             return false;
         }
@@ -131,36 +123,34 @@ static bool checkOutputs(const std::vector<std::string> &inputs, const std::stri
     return true;
 }
 
-static bool parseNumber(const char *text, double &value)
-{
+static bool parseNumber(const char *text, double &value) {
     char *end = nullptr;
     const double parsed = strtod(text, &end);
-    if (end == text || *end != '\0' || !std::isfinite(parsed))
+    if (end == text || *end != '\0' || !std::isfinite(parsed)) {
         return false;
+    }
     value = parsed;
     return true;
 }
 
-static std::string errnoText()
-{
+static std::string errnoText() {
     char buffer[256] = "unknown error";
-    (void) strerror_r(errno, buffer, sizeof buffer);
+    (void)strerror_r(errno, buffer, sizeof buffer);
     return buffer;
 }
 
-namespace
-{
+namespace {
 
 // Removes the temporary output unless it was renamed into place.
-class TempFileGuard
-{
+class TempFileGuard {
 public:
     explicit TempFileGuard(std::string path) : fPath(std::move(path)) {}
     TempFileGuard(const TempFileGuard &) = delete;
     TempFileGuard &operator=(const TempFileGuard &) = delete;
-    ~TempFileGuard()
-    {
-        if (!fCommitted) unlink(fPath.c_str());
+    ~TempFileGuard() {
+        if (!fCommitted) {
+            unlink(fPath.c_str());
+        }
     }
     void commit() { fCommitted = true; }
 
@@ -170,8 +160,7 @@ private:
 };
 
 // Keeps the XMP SDK initialized for the lifetime of the batch.
-class XmpSdkScope
-{
+class XmpSdkScope {
 public:
     XmpSdkScope() { dng_xmp_sdk::InitializeSDK(); }
     XmpSdkScope(const XmpSdkScope &) = delete;
@@ -188,12 +177,10 @@ static bool convertOne(const char *inputPath,
                        const dng_color_space &colorSpace,
                        double exposureEV,
                        double shadows,
-                       const char *dcpPath)
-{
+                       const char *dcpPath) {
     fprintf(stderr, "Converting %s ...\n", inputPath);
 
-    try
-    {
+    try {
         dng_host host;
 
         dng_file_stream stream(inputPath);
@@ -202,8 +189,7 @@ static bool convertOne(const char *inputPath,
         info.Parse(host, stream);
         info.PostParse(host);
 
-        if (!info.IsValidDNG())
-        {
+        if (!info.IsValidDNG()) {
             fprintf(stderr, "  ERROR: not a valid DNG: %s\n", inputPath);
             return false;
         }
@@ -216,25 +202,23 @@ static bool convertOne(const char *inputPath,
 
         // Optional external camera profile (.dcp), e.g. Adobe Standard.
         dng_camera_profile_id dcpID;
-        if (dcpPath != nullptr)
-        {
+        if (dcpPath != nullptr) {
             AutoPtr<dng_camera_profile> prof(new dng_camera_profile);
             dng_file_stream dcpStream(dcpPath);
-            if (!prof->ParseExtended(dcpStream) || !prof->IsValid(negative->ColorChannels()))
-            {
+            if (!prof->ParseExtended(dcpStream) || !prof->IsValid(negative->ColorChannels())) {
                 fprintf(stderr, "  ERROR: cannot use profile: %s\n", dcpPath);
                 return false;
             }
             // AddProfile renames a nameless profile, which changes its ID, so
             // name it first and capture the ID afterward.
-            if (prof->Name().IsEmpty())
+            if (prof->Name().IsEmpty()) {
                 prof->SetName("External DCP");
+            }
             dcpID = prof->ProfileID();
             negative->AddProfile(prof);
 
             dng_camera_profile added;
-            if (!negative->GetProfileByID(dcpID, added, /*useDefaultIfNoMatch=*/false))
-            {
+            if (!negative->GetProfileByID(dcpID, added, /*useDefaultIfNoMatch=*/false)) {
                 fprintf(stderr, "  ERROR: cannot select profile: %s\n", dcpPath);
                 return false;
             }
@@ -247,8 +231,7 @@ static bool convertOne(const char *inputPath,
             negative->ReadStage1Image(host, stream, info);
         }
 
-        if (info.fMaskIndex != -1)
-        {
+        if (info.fMaskIndex != -1) {
             const dng_timer t("Read transparency mask");
             negative->ReadTransparencyMask(host, stream, info);
         }
@@ -271,8 +254,12 @@ static bool convertOne(const char *inputPath,
         dng_render render(host, *negative);
         render.SetFinalSpace(colorSpace);
         render.SetFinalPixelType(ttShort);  // 16-bit
-        if (dcpPath != nullptr) render.SetCameraProfileID(dcpID);
-        if (exposureEV != 0.0) render.SetExposure(exposureEV);
+        if (dcpPath != nullptr) {
+            render.SetCameraProfileID(dcpID);
+        }
+        if (exposureEV != 0.0) {
+            render.SetExposure(exposureEV);
+        }
         render.SetShadows(shadows);
 
         AutoPtr<dng_image> finalImage;
@@ -286,8 +273,7 @@ static bool convertOne(const char *inputPath,
 
         // These settings describe a raw conversion that is now baked in. Left
         // in the TIFF, Adobe apps could apply them again to rendered pixels.
-        if (negative->GetXMP() != nullptr)
-        {
+        if (negative->GetXMP() != nullptr) {
             negative->GetXMP()->RemoveProperties(XMP_NS_CRS);
             negative->GetXMP()->RemoveProperties(XMP_NS_CRSS);
             negative->GetXMP()->RemoveProperties(XMP_NS_CRD);
@@ -299,15 +285,13 @@ static bool convertOne(const char *inputPath,
         const std::string tmpPath =
             std::string(outputPath) + ".tmp." + std::to_string(getpid());
         const int fd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
-        if (fd < 0)
-        {
+        if (fd < 0) {
             fprintf(stderr, "  ERROR: cannot create %s: %s\n", tmpPath.c_str(), errnoText().c_str());
             return false;
         }
         TempFileGuard guard(tmpPath);
         FILE *file = fdopen(fd, "wb");
-        if (file == nullptr)
-        {
+        if (file == nullptr) {
             fprintf(stderr, "  ERROR: cannot open %s: %s\n", tmpPath.c_str(), errnoText().c_str());
             close(fd);
             return false;
@@ -318,10 +302,10 @@ static bool convertOne(const char *inputPath,
 
             const dng_camera_profile *profilePtr = nullptr;
             dng_camera_profile profile;
-            if (!negative->IsMonochrome())
-            {
-                if (negative->GetProfileByID(render.CameraProfileID(), profile))
+            if (!negative->IsMonochrome()) {
+                if (negative->GetProfileByID(render.CameraProfileID(), profile)) {
                     profilePtr = &profile;
+                }
             }
 
             dng_image_writer writer;
@@ -335,15 +319,13 @@ static bool convertOne(const char *inputPath,
 
             // The stream's destructor ignores close errors, so surface them here.
             out.Flush();
-            if (fflush(file) != 0 || fsync(fileno(file)) != 0)
-            {
+            if (fflush(file) != 0 || fsync(fileno(file)) != 0) {
                 fprintf(stderr, "  ERROR: cannot write %s: %s\n", tmpPath.c_str(), errnoText().c_str());
                 return false;
             }
         }
 
-        if (rename(tmpPath.c_str(), outputPath) != 0)
-        {
+        if (rename(tmpPath.c_str(), outputPath) != 0) {
             fprintf(stderr, "  ERROR: cannot create %s: %s\n", outputPath, errnoText().c_str());
             return false;
         }
@@ -351,14 +333,10 @@ static bool convertOne(const char *inputPath,
 
         fprintf(stderr, "  → %s\n", outputPath);
         return true;
-    }
-    catch (const dng_exception &e)
-    {
+    } catch (const dng_exception &e) {
         fprintf(stderr, "  ERROR (DNG %d): %s\n", e.ErrorCode(), inputPath);
         return false;
-    }
-    catch (...)
-    {
+    } catch (...) {
         fprintf(stderr, "  ERROR (unknown): %s\n", inputPath);
         return false;
     }
@@ -366,17 +344,14 @@ static bool convertOne(const char *inputPath,
 
 // ---------------------------------------------------------------------------
 
-static void usage(const char *argv0)
-{
+static void usage(const char *argv0) {
     fprintf(stderr,
             "Usage: %s [-cs srgb|adobe|prophoto|p3] [-out <dir>] [-ev <stops>] [-shadows <n>] [-dcp <profile.dcp>] file.dng ...\n",
             argv0);
 }
 
-static int run(int argc, char *argv[])
-{
-    if (argc < 2)
-    {
+static int run(int argc, char *argv[]) {
+    if (argc < 2) {
         usage(argv[0]);
         return 1;
     }
@@ -385,100 +360,82 @@ static int run(int argc, char *argv[])
     std::string outDir;
     double exposureEV = 0.0;
     const char *dcpPath = nullptr;
-    double shadows    = 0.0;   // SDK default is 5.0, which crushes shadows on profile-less DNGs
+    double shadows = 0.0;  // SDK default is 5.0, which crushes shadows on profile-less DNGs
     std::vector<std::string> inputs;
 
-    for (int i = 1; i < argc; ++i)
-    {
-        if (strcmp(argv[i], "-cs") == 0 && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-cs") == 0 && i + 1 < argc) {
             ++i;
-            if      (strcmp(argv[i], "adobe")    == 0) colorSpace = &dng_space_AdobeRGB::Get();
-            else if (strcmp(argv[i], "prophoto") == 0) colorSpace = &dng_space_ProPhoto::Get();
-            else if (strcmp(argv[i], "p3")       == 0) colorSpace = &dng_space_DisplayP3::Get();
-            else if (strcmp(argv[i], "srgb")     == 0) colorSpace = &dng_space_sRGB::Get();
-            else
-            {
+            if (strcmp(argv[i], "adobe") == 0) {
+                colorSpace = &dng_space_AdobeRGB::Get();
+            } else if (strcmp(argv[i], "prophoto") == 0) {
+                colorSpace = &dng_space_ProPhoto::Get();
+            } else if (strcmp(argv[i], "p3") == 0) {
+                colorSpace = &dng_space_DisplayP3::Get();
+            } else if (strcmp(argv[i], "srgb") == 0) {
+                colorSpace = &dng_space_sRGB::Get();
+            } else {
                 fprintf(stderr, "Unknown color space: %s\n", argv[i]);
                 usage(argv[0]);
                 return 1;
             }
-        }
-        else if (strcmp(argv[i], "-ev") == 0 && i + 1 < argc)
-        {
+        } else if (strcmp(argv[i], "-ev") == 0 && i + 1 < argc) {
             ++i;
-            if (!parseNumber(argv[i], exposureEV))
-            {
+            if (!parseNumber(argv[i], exposureEV)) {
                 fprintf(stderr, "Invalid -ev value: %s\n", argv[i]);
                 return 1;
             }
-        }
-        else if (strcmp(argv[i], "-dcp") == 0 && i + 1 < argc)
-        {
+        } else if (strcmp(argv[i], "-dcp") == 0 && i + 1 < argc) {
             dcpPath = argv[++i];
-        }
-        else if (strcmp(argv[i], "-shadows") == 0 && i + 1 < argc)
-        {
+        } else if (strcmp(argv[i], "-shadows") == 0 && i + 1 < argc) {
             ++i;
-            if (!parseNumber(argv[i], shadows) || shadows < 0.0)
-            {
+            if (!parseNumber(argv[i], shadows) || shadows < 0.0) {
                 fprintf(stderr, "Invalid -shadows value: %s\n", argv[i]);
                 return 1;
             }
-        }
-        else if (strcmp(argv[i], "-out") == 0 && i + 1 < argc)
-        {
+        } else if (strcmp(argv[i], "-out") == 0 && i + 1 < argc) {
             outDir = argv[++i];
-        }
-        else if (argv[i][0] == '-')
-        {
+        } else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             usage(argv[0]);
             return 1;
-        }
-        else
-        {
+        } else {
             inputs.emplace_back(argv[i]);
         }
     }
 
-    if (inputs.empty())
-    {
+    if (inputs.empty()) {
         fprintf(stderr, "No input files.\n");
         usage(argv[0]);
         return 1;
     }
 
-    if (!outDir.empty() && !isDirectory(outDir))
-    {
+    if (!outDir.empty() && !isDirectory(outDir)) {
         fprintf(stderr, "Output directory does not exist: %s\n", outDir.c_str());
         return 1;
     }
 
-    if (!checkOutputs(inputs, outDir))
+    if (!checkOutputs(inputs, outDir)) {
         return 1;
+    }
 
     const XmpSdkScope xmpSdk;
 
     int failed = 0;
-    for (const std::string &inp : inputs)
-    {
+    for (const std::string &inp : inputs) {
         const std::string out = outputPathFor(inp, outDir);
-        if (!convertOne(inp.c_str(), out.c_str(), *colorSpace, exposureEV, shadows, dcpPath))
+        if (!convertOne(inp.c_str(), out.c_str(), *colorSpace, exposureEV, shadows, dcpPath)) {
             ++failed;
+        }
     }
 
     return failed != 0 ? 1 : 0;
 }
 
-int main(int argc, char *argv[])
-{
-    try
-    {
+int main(int argc, char *argv[]) {
+    try {
         return run(argc, argv);
-    }
-    catch (...)
-    {
+    } catch (...) {
         fputs("ERROR: unexpected failure\n", stderr);
         return 1;
     }

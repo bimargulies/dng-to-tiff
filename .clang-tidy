@@ -1,0 +1,7 @@
+# Project style: every if, else, for, while and do body uses braces.
+Checks: '-*,readability-braces-around-statements'
+WarningsAsErrors: 'readability-braces-around-statements'
+HeaderFilterRegex: '.*/src/.*'
+CheckOptions:
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '0'

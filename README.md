@@ -96,6 +96,12 @@ dng_to_tiff -dcp "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Ad
 
 These profiles are part of Camera Raw and are not included here.
 
+## Development
+
+Run the linter with `scripts/lint.sh`. It needs a configured `build/` directory plus `clang-format` and
+`clang-tidy` (`brew install llvm`). Every `if`, `else` and loop body must use braces, with the opening
+brace on the same line. Fix formatting with `clang-format -i src/*.cpp`.
+
 ## License
 
 This project's own code is under the [MIT license](./LICENSE).
