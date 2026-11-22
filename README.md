@@ -52,6 +52,16 @@ It has been tested only on Sony A7R V ARW files wrapped as DNG by
    cmake --build build --parallel
    ```
 
+4. Install it. This puts the binary in `~/.local/bin`, which needs no `sudo`; make sure that directory is
+   on your `PATH`:
+
+   ```bash
+   cmake --install build --prefix ~/.local
+   ```
+
+   Without `--prefix` it installs to `/usr/local/bin`, which usually requires `sudo`. The binary is
+   self-contained, so it keeps working if you later delete the build tree or the SDK.
+
 ## Usage
 
 ```bash

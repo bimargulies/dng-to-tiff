@@ -31,7 +31,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-Outputs `build/dng_to_tiff`.
+Outputs `build/dng_to_tiff`.  Install with `cmake --install build --prefix ~/.local` (the default prefix, `/usr/local`, needs `sudo`).
 
 ## Usage
 
