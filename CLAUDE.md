@@ -6,7 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A CLI tool (`dng_to_tiff`) that converts DNG files (specifically dnglab-wrapped Sony ARW) to 16-bit TIFF using the Adobe DNG SDK's reference renderer.  Intended to replace the flaky Photoshop Image Processor step in the `bridge-zerene-stack` workflow next door.
 
-## Build — two phases
+## Build
+
+First install the SDK (gitignored, never committed): download it from Adobe in a browser, then `scripts/fetch-sdk.sh <zip-or-folder>`. Adobe answered a scripted request to its download page with 403, so `SDK_URL`/`SDK_SHA256` are unpinned; the script checks for the tested SDK build (2802) instead.
+
+Then two phases:
 
 ### Phase 1: build XMP and libjxl static libs (once)
 

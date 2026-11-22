@@ -9,6 +9,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 SDK="$PROJECT_ROOT/third-party/dng_sdk"
 CONFIG=Release
 
+if [ ! -f "$SDK/dng_sdk/source/dng_negative.cpp" ]; then
+    echo "error: DNG SDK not found in $SDK; run scripts/fetch-sdk.sh first" >&2
+    exit 1
+fi
+
 EXPAT_INCLUDE="/opt/homebrew/opt/expat/include"
 EXPAT_LIB="/opt/homebrew/opt/expat/lib"
 
