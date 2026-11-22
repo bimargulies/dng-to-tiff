@@ -22,10 +22,14 @@ JXL_OUT="$SDK/libjxl/client_projects/mac/build"
 
 echo "=== Applying SDK patches ==="
 for p in "$PROJECT_ROOT"/patches/*.patch; do
-    if patch -d "$SDK" -p1 -N --dry-run -s < "$p" >/dev/null 2>&1; then
-        patch -d "$SDK" -p1 -N < "$p"
+    if patch -d "$SDK" -p1 -N -f --dry-run -s < "$p" > /dev/null 2>&1; then
+        patch -d "$SDK" -p1 -N -f < "$p"
+    elif patch -d "$SDK" -p1 -R -f --dry-run -s < "$p" > /dev/null 2>&1; then
+        # -f matters: without it, BSD patch can report success here on an unpatched tree.
+        echo "already applied: $(basename "$p")"
     else
-        echo "already applied (or does not apply): $(basename "$p")"
+        echo "error: patch does not apply to this SDK: $(basename "$p")" >&2
+        exit 1
     fi
 done
 
@@ -58,5 +62,5 @@ xcodebuild \
 
 echo ""
 echo "Done. Libraries:"
-ls -lh "$XMP_OUT"/*.a 2>/dev/null || echo "  (no XMP .a files yet)"
-ls -lh "$JXL_OUT"/*.a  2>/dev/null || echo "  (no jxl .a files yet)"
+ls -lh "$XMP_OUT"/*.a 2> /dev/null || echo "  (no XMP .a files yet)"
+ls -lh "$JXL_OUT"/*.a 2> /dev/null || echo "  (no jxl .a files yet)"

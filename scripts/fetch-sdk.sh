@@ -20,10 +20,13 @@ TESTED_BUILD=2802
 SDK_URL="${SDK_URL:-}"
 SDK_SHA256="${SDK_SHA256:-}"
 
-die() { echo "error: $*" >&2; exit 1; }
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
 
 manual_help() {
-    cat >&2 <<EOF
+    cat >&2 << EOF
 
 Download the DNG SDK in a browser from:
   $SDK_PAGE
@@ -41,7 +44,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/dng-sdk.XXXXXX")"
 trap 'rm -rf "$WORK" "$DEST.partial"' EXIT
 
 if [ $# -eq 1 ] && [ -d "$1" ]; then
-    ROOT="${1%/}"
+    # Resolve symlinks so we copy the SDK rather than a link to someone's original.
+    ROOT="$(cd "$1" && pwd -P)"
     [ -f "$ROOT/dng_sdk/source/dng_negative.cpp" ] || die "$ROOT does not look like the DNG SDK"
 else
     if [ $# -eq 1 ]; then
@@ -83,7 +87,7 @@ else
 fi
 
 BUILD="$(sed -n 's/^#define kDNGSDK_BuildVersion[[:space:]]*\([0-9]*\).*/\1/p' \
-    "$ROOT/dng_sdk/source/dng_flags.h" 2>/dev/null | head -n 1)"
+    "$ROOT/dng_sdk/source/dng_flags.h" 2> /dev/null | head -n 1 || true)"
 if [ "$BUILD" = "$TESTED_BUILD" ]; then
     echo "DNG SDK build $BUILD (the tested build)."
 else

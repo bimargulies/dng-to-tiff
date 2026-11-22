@@ -1,7 +1,8 @@
-// dng_to_tiff — batch DNG → 16-bit sRGB TIFF using the Adobe DNG SDK.
+// dng_to_tiff — batch DNG → 16-bit TIFF using the Adobe DNG SDK.
 //
 // Usage:
-//   dng_to_tiff [-cs <space>] [-out <dir>] file1.dng [file2.dng ...]
+//   dng_to_tiff [-cs <space>] [-out <dir>] [-ev <stops>] [-shadows <n>]
+//               [-dcp <profile.dcp>] file1.dng [file2.dng ...]
 //
 // Color space options (default: sRGB):
 //   srgb       sRGB (default; best for Zerene Stacker input)
@@ -11,7 +12,9 @@
 //
 // The output TIFF name matches the input stem with a .tif extension.
 // If -out is not given, TIFFs are written beside the input files.
+// An existing output is replaced only after the new file is completely written.
 
+#include "dng_camera_profile.h"
 #include "dng_color_space.h"
 #include "dng_exceptions.h"
 #include "dng_file_stream.h"
@@ -23,11 +26,24 @@
 #include "dng_render.h"
 #include "dng_tag_types.h"
 #include "dng_tag_values.h"
+#include "dng_xmp.h"
 #include "dng_xmp_sdk.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <climits>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -35,21 +51,135 @@
 static std::string stem(const std::string &path)
 {
     // Remove directory prefix.
-    size_t slash = path.find_last_of("/\\");
+    const size_t slash = path.find_last_of('/');
     std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
-    // Remove extension.
-    size_t dot = name.find_last_of('.');
-    if (dot != std::string::npos)
-        name = name.substr(0, dot);
+    // Remove extension (but keep a leading dot of a hidden file).
+    const size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos && dot > 0)
+        name.resize(dot);
     return name;
 }
 
 static std::string dirOf(const std::string &path)
 {
-    size_t slash = path.find_last_of("/\\");
+    const size_t slash = path.find_last_of('/');
     if (slash == std::string::npos) return ".";
     return path.substr(0, slash);
 }
+
+static std::string outputPathFor(const std::string &input, const std::string &outDir)
+{
+    std::string out = outDir.empty() ? dirOf(input) : outDir;
+    out += '/';
+    out += stem(input);
+    out += ".tif";
+    return out;
+}
+
+static bool isDirectory(const std::string &path)
+{
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static bool sameFile(const std::string &a, const std::string &b)
+{
+    struct stat sa {};
+    struct stat sb {};
+    return stat(a.c_str(), &sa) == 0 && stat(b.c_str(), &sb) == 0 &&
+           sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+// A key identifying an output path before the file exists. The name is folded
+// to lower case because the default macOS file system ignores case.
+static std::string outputKey(const std::string &output)
+{
+    char resolved[PATH_MAX];
+    const std::string dir = dirOf(output);
+    std::string key = (realpath(dir.c_str(), resolved) != nullptr) ? resolved : dir;
+    std::string name = output.substr(output.find_last_of('/') + 1);
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    key += '/';
+    key += name;
+    return key;
+}
+
+// Refuse, before any work is done, a batch that would overwrite one of its own
+// inputs or write two inputs to the same output.
+static bool checkOutputs(const std::vector<std::string> &inputs, const std::string &outDir)
+{
+    std::set<std::string> seen;
+    for (const std::string &input : inputs)
+    {
+        const std::string output = outputPathFor(input, outDir);
+        for (const std::string &other : inputs)
+        {
+            if (sameFile(output, other))
+            {
+                fprintf(stderr, "Output %s would overwrite input %s\n",
+                        output.c_str(), other.c_str());
+                return false;
+            }
+        }
+        if (!seen.insert(outputKey(output)).second)
+        {
+            fprintf(stderr, "More than one input would be written to %s\n", output.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parseNumber(const char *text, double &value)
+{
+    char *end = nullptr;
+    const double parsed = strtod(text, &end);
+    if (end == text || *end != '\0' || !std::isfinite(parsed))
+        return false;
+    value = parsed;
+    return true;
+}
+
+static std::string errnoText()
+{
+    char buffer[256] = "unknown error";
+    (void) strerror_r(errno, buffer, sizeof buffer);
+    return buffer;
+}
+
+namespace
+{
+
+// Removes the temporary output unless it was renamed into place.
+class TempFileGuard
+{
+public:
+    explicit TempFileGuard(std::string path) : fPath(std::move(path)) {}
+    TempFileGuard(const TempFileGuard &) = delete;
+    TempFileGuard &operator=(const TempFileGuard &) = delete;
+    ~TempFileGuard()
+    {
+        if (!fCommitted) unlink(fPath.c_str());
+    }
+    void commit() { fCommitted = true; }
+
+private:
+    std::string fPath;
+    bool fCommitted = false;
+};
+
+// Keeps the XMP SDK initialized for the lifetime of the batch.
+class XmpSdkScope
+{
+public:
+    XmpSdkScope() { dng_xmp_sdk::InitializeSDK(); }
+    XmpSdkScope(const XmpSdkScope &) = delete;
+    XmpSdkScope &operator=(const XmpSdkScope &) = delete;
+    ~XmpSdkScope() { dng_xmp_sdk::TerminateSDK(); }
+};
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 
@@ -86,60 +216,105 @@ static bool convertOne(const char *inputPath,
 
         // Optional external camera profile (.dcp), e.g. Adobe Standard.
         dng_camera_profile_id dcpID;
-        if (dcpPath)
+        if (dcpPath != nullptr)
         {
             AutoPtr<dng_camera_profile> prof(new dng_camera_profile);
             dng_file_stream dcpStream(dcpPath);
-            if (!prof->ParseExtended(dcpStream))
+            if (!prof->ParseExtended(dcpStream) || !prof->IsValid(negative->ColorChannels()))
             {
-                fprintf(stderr, "  ERROR: cannot parse profile: %s\n", dcpPath);
+                fprintf(stderr, "  ERROR: cannot use profile: %s\n", dcpPath);
                 return false;
             }
+            // AddProfile renames a nameless profile, which changes its ID, so
+            // name it first and capture the ID afterward.
+            if (prof->Name().IsEmpty())
+                prof->SetName("External DCP");
             dcpID = prof->ProfileID();
             negative->AddProfile(prof);
+
+            dng_camera_profile added;
+            if (!negative->GetProfileByID(dcpID, added, /*useDefaultIfNoMatch=*/false))
+            {
+                fprintf(stderr, "  ERROR: cannot select profile: %s\n", dcpPath);
+                return false;
+            }
         }
 
-        // Read the raw (stage 1) image.  For dnglab-wrapped Sony ARW the
-        // enhanced IFD does not exist, so ReadStage1Image is always correct.
+        // Read the raw (stage 1) image. An enhanced image, if the DNG has one,
+        // is deliberately ignored: this tool always renders from the raw data.
         {
-            dng_timer t("Read stage 1");
+            const dng_timer t("Read stage 1");
             negative->ReadStage1Image(host, stream, info);
+        }
+
+        if (info.fMaskIndex != -1)
+        {
+            const dng_timer t("Read transparency mask");
+            negative->ReadTransparencyMask(host, stream, info);
         }
 
         negative->SynchronizeMetadata();
 
         // Linearise raw → stage 2 (apply black subtraction, linearisation table).
         {
-            dng_timer t("Linearise");
+            const dng_timer t("Linearise");
             negative->BuildStage2Image(host);
         }
 
         // Demosaic → stage 3 (full-colour, full-resolution).
         {
-            dng_timer t("Demosaic");
-            negative->BuildStage3Image(host, /*mosaicPlane=*/-1);
+            const dng_timer t("Demosaic");
+            negative->BuildStage3Image(host, /*srcPlane=*/-1);
         }
 
         // Render: apply colour matrix, white balance, tone curve.
         dng_render render(host, *negative);
         render.SetFinalSpace(colorSpace);
         render.SetFinalPixelType(ttShort);  // 16-bit
-        if (dcpPath) render.SetCameraProfileID(dcpID);
+        if (dcpPath != nullptr) render.SetCameraProfileID(dcpID);
         if (exposureEV != 0.0) render.SetExposure(exposureEV);
         render.SetShadows(shadows);
 
         AutoPtr<dng_image> finalImage;
         {
-            dng_timer t("Render");
+            const dng_timer t("Render");
             finalImage.Reset(render.Render());
         }
 
         // Apply EXIF orientation so the TIFF pixel order is upright.
         finalImage->Rotate(negative->Orientation());
 
-        // Write TIFF.
+        // These settings describe a raw conversion that is now baked in. Left
+        // in the TIFF, Adobe apps could apply them again to rendered pixels.
+        if (negative->GetXMP() != nullptr)
         {
-            dng_file_stream out(outputPath, /*forWrite=*/true);
+            negative->GetXMP()->RemoveProperties(XMP_NS_CRS);
+            negative->GetXMP()->RemoveProperties(XMP_NS_CRSS);
+            negative->GetXMP()->RemoveProperties(XMP_NS_CRD);
+            negative->GetXMP()->RemoveProperties(XMP_NS_CRLCP);
+        }
+
+        // Write to a temporary file in the same directory, then rename, so a
+        // failure can never leave a partial TIFF or destroy an earlier good one.
+        const std::string tmpPath =
+            std::string(outputPath) + ".tmp." + std::to_string(getpid());
+        const int fd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+        if (fd < 0)
+        {
+            fprintf(stderr, "  ERROR: cannot create %s: %s\n", tmpPath.c_str(), errnoText().c_str());
+            return false;
+        }
+        TempFileGuard guard(tmpPath);
+        FILE *file = fdopen(fd, "wb");
+        if (file == nullptr)
+        {
+            fprintf(stderr, "  ERROR: cannot open %s: %s\n", tmpPath.c_str(), errnoText().c_str());
+            close(fd);
+            return false;
+        }
+
+        {
+            dng_file_stream out(file);  // closes the FILE when destroyed
 
             const dng_camera_profile *profilePtr = nullptr;
             dng_camera_profile profile;
@@ -157,7 +332,22 @@ static bool convertOne(const char *inputPath,
                              ccUncompressed,
                              &negative->Metadata(),
                              &render.FinalSpace(profilePtr));
+
+            // The stream's destructor ignores close errors, so surface them here.
+            out.Flush();
+            if (fflush(file) != 0 || fsync(fileno(file)) != 0)
+            {
+                fprintf(stderr, "  ERROR: cannot write %s: %s\n", tmpPath.c_str(), errnoText().c_str());
+                return false;
+            }
         }
+
+        if (rename(tmpPath.c_str(), outputPath) != 0)
+        {
+            fprintf(stderr, "  ERROR: cannot create %s: %s\n", outputPath, errnoText().c_str());
+            return false;
+        }
+        guard.commit();
 
         fprintf(stderr, "  → %s\n", outputPath);
         return true;
@@ -183,16 +373,13 @@ static void usage(const char *argv0)
             argv0);
 }
 
-int main(int argc, char *argv[])
+static int run(int argc, char *argv[])
 {
     if (argc < 2)
     {
         usage(argv[0]);
         return 1;
     }
-
-    // Initialise XMP before any DNG work.
-    dng_xmp_sdk::InitializeSDK();
 
     const dng_color_space *colorSpace = &dng_space_sRGB::Get();
     std::string outDir;
@@ -218,11 +405,27 @@ int main(int argc, char *argv[])
             }
         }
         else if (strcmp(argv[i], "-ev") == 0 && i + 1 < argc)
-            exposureEV = atof(argv[++i]);
+        {
+            ++i;
+            if (!parseNumber(argv[i], exposureEV))
+            {
+                fprintf(stderr, "Invalid -ev value: %s\n", argv[i]);
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "-dcp") == 0 && i + 1 < argc)
+        {
             dcpPath = argv[++i];
+        }
         else if (strcmp(argv[i], "-shadows") == 0 && i + 1 < argc)
-            shadows = atof(argv[++i]);
+        {
+            ++i;
+            if (!parseNumber(argv[i], shadows) || shadows < 0.0)
+            {
+                fprintf(stderr, "Invalid -shadows value: %s\n", argv[i]);
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "-out") == 0 && i + 1 < argc)
         {
             outDir = argv[++i];
@@ -235,7 +438,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            inputs.push_back(argv[i]);
+            inputs.emplace_back(argv[i]);
         }
     }
 
@@ -246,18 +449,37 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    if (!outDir.empty() && !isDirectory(outDir))
+    {
+        fprintf(stderr, "Output directory does not exist: %s\n", outDir.c_str());
+        return 1;
+    }
+
+    if (!checkOutputs(inputs, outDir))
+        return 1;
+
+    const XmpSdkScope xmpSdk;
+
     int failed = 0;
     for (const std::string &inp : inputs)
     {
-        std::string dir  = outDir.empty() ? dirOf(inp) : outDir;
-        std::string name = stem(inp) + ".tif";
-        std::string out  = dir + "/" + name;
-
+        const std::string out = outputPathFor(inp, outDir);
         if (!convertOne(inp.c_str(), out.c_str(), *colorSpace, exposureEV, shadows, dcpPath))
             ++failed;
     }
 
-    dng_xmp_sdk::TerminateSDK();
+    return failed != 0 ? 1 : 0;
+}
 
-    return failed ? 1 : 0;
+int main(int argc, char *argv[])
+{
+    try
+    {
+        return run(argc, argv);
+    }
+    catch (...)
+    {
+        fputs("ERROR: unexpected failure\n", stderr);
+        return 1;
+    }
 }
